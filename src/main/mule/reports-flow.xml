@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Attribute present, value questionable: "0" means no timeout, MILLISECONDS is rounded by the connector. -->
+
+    <flow name="reports-daily-sales-flow" doc:id="c29e7a0d-5fb1-4ed0-a6a9-9d7b4f8c0e99">
+        <db:select doc:name="Select daily sales" config-ref="Database_Config" queryTimeout="0">
+            <db:sql><![CDATA[SELECT report_date, region, SUM(total_amount) AS revenue
+FROM sales_report
+WHERE report_date = :reportDate
+GROUP BY report_date, region]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ reportDate: vars.reportDate }]]]></db:input-parameters>
+        </db:select>
+    </flow>
+
+    <flow name="reports-mark-jobs-done-flow" doc:id="d3af8b1e-60c2-4fe1-b7ba-0e8c5a9d1f00">
+        <db:bulk-update doc:name="Mark report jobs done" config-ref="Database_Config" queryTimeout="500" queryTimeoutUnit="MILLISECONDS">
+            <db:bulk-input-parameters><![CDATA[#[payload map { jobId: $.id }]]]></db:bulk-input-parameters>
+            <db:sql><![CDATA[UPDATE report_jobs
+SET status = 'DONE', finished_at = CURRENT_TIMESTAMP
+WHERE id = :jobId]]></db:sql>
+        </db:bulk-update>
+        <logger level="INFO" doc:name="Log completion" message="#['Report jobs closed: ' ++ (sizeOf(payload) as String)]"/>
+    </flow>
+
+</mule>

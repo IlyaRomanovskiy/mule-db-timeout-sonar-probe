@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Lives two folders below src/main/mule on purpose: proves the checker recurses into subfolders. -->
+
+    <flow name="batch-cleanup-batch-log-flow" doc:id="e4b09c2f-71d3-4af2-c8cb-1f9d6b0e2a11">
+        <scheduler doc:name="Nightly scheduler">
+            <scheduling-strategy>
+                <cron expression="0 0 2 * * ?" timeZone="UTC"/>
+            </scheduling-strategy>
+        </scheduler>
+        <set-payload value="#[[{ olderThanDays: 30 }, { olderThanDays: 90 }]]" doc:name="Retention buckets"/>
+        <db:bulk-delete doc:name="Delete old batch log rows" config-ref="Database_Config">
+            <db:bulk-input-parameters><![CDATA[#[payload]]]></db:bulk-input-parameters>
+            <db:sql><![CDATA[DELETE FROM batch_log
+WHERE created_at < CURRENT_DATE - :olderThanDays]]></db:sql>
+        </db:bulk-delete>
+        <logger level="INFO" doc:name="Log cleanup" message="#['Batch log cleanup ran for ' ++ (sizeOf(payload) as String) ++ ' retention buckets']"/>
+    </flow>
+
+</mule>

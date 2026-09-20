@@ -1,0 +1,160 @@
+# Runs the query-timeout check, validates its generic issue report, and (when the
+# repository is wired to a Sonar project) imports the report through a real scan.
+#
+# Without SONAR_TOKEN / SONAR_ORGANIZATION / SONAR_PROJECT_KEY the job still runs
+# the check, asserts the expected finding count and uploads build/ as an artifact;
+# only the scan itself is skipped, with a notice saying what to configure.
+name: Sonar import probe
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check-and-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      # Default scope of the checker on this repository (see README, "Expected findings").
+      EXPECTED_DEFAULT_FINDINGS: "3"
+    steps:
+      - name: Check out (full history, Sonar needs blame data)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Run the check (default scope) and write the generic issue report
+        shell: bash
+        run: |
+          mkdir -p build
+          python3 tools/check-db-query-timeout.py . --github --warn-only --sonar-report build/sonar-report.json
+
+      - name: Run the extended scope (informational, never fails the job)
+        shell: bash
+        run: |
+          python3 tools/check-db-query-timeout.py . --extended --json > build/extended.json || true
+          python3 tools/check-db-query-timeout.py . --extended --require-property --json > build/extended-require-property.json || true
+
+      - name: Self-check the generic issue report
+        shell: bash
+        run: |
+          set -euo pipefail
+          report=build/sonar-report.json
+          test -s "$report"
+          echo "rules are present and non-empty"
+          jq -e '(.rules | type == "array") and (.rules | length > 0)' "$report" > /dev/null
+          echo "rule ids are unique"
+          jq -e '(.rules | map(.id) | length) == (.rules | map(.id) | unique | length)' "$report" > /dev/null
+          echo "issues is an array"
+          jq -e '.issues | type == "array"' "$report" > /dev/null
+          echo "every issue.ruleId refers to a declared rule"
+          jq -e '(.rules | map(.id)) as $ids | all(.issues[]; .ruleId as $r | ($ids | index($r)) != null)' "$report" > /dev/null
+          echo "issues carry neither severity nor type (those live on the rule)"
+          jq -e 'all(.issues[]; (has("severity") | not) and (has("type") | not))' "$report" > /dev/null
+          echo "every rule carries the fields the scanner validates (id, name, engineId, non-empty impacts; no legacy type/severity)"
+          jq -e 'all(.rules[]; (.id | length > 0) and (.name | length > 0) and (.engineId | length > 0) and ((.impacts | length) > 0) and (has("type") | not) and (has("severity") | not))' "$report" > /dev/null
+          echo "every issue has a message, a filePath and a startLine"
+          jq -e 'all(.issues[]; (.primaryLocation.message | length > 0) and (.primaryLocation.filePath | length > 0) and (.primaryLocation.textRange.startLine >= 1))' "$report" > /dev/null
+          echo "every referenced file exists in the checkout"
+          while IFS= read -r f; do
+            if [ ! -f "$f" ]; then
+              echo "::error::report references a file that does not exist: $f"
+              exit 1
+            fi
+          done < <(jq -r '.issues[].primaryLocation.filePath' "$report")
+          count=$(jq '.issues | length' "$report")
+          echo "Default-mode issue count: $count (expected $EXPECTED_DEFAULT_FINDINGS)"
+          if [ "$count" -ne "$EXPECTED_DEFAULT_FINDINGS" ]; then
+            echo "::error::expected $EXPECTED_DEFAULT_FINDINGS default-mode issues, got $count"
+            exit 1
+          fi
+
+      - name: Upload checker output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: query-timeout-check
+          path: build/
+          if-no-files-found: error
+
+      - name: Decide whether the Sonar scan can run
+        id: gate
+        shell: bash
+        env:
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+        run: |
+          missing=""
+          [ -n "$SONAR_TOKEN" ] || missing="$missing secrets.SONAR_TOKEN"
+          [ -n "$SONAR_ORGANIZATION" ] || missing="$missing vars.SONAR_ORGANIZATION"
+          [ -n "$SONAR_PROJECT_KEY" ] || missing="$missing vars.SONAR_PROJECT_KEY"
+          if [ -n "$missing" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Sonar scan skipped::Not configured:${missing}. Set repository variables SONAR_ORGANIZATION and SONAR_PROJECT_KEY, repository secret SONAR_TOKEN, and switch the Sonar project to CI-based analysis (Automatic Analysis off) before the scan step can run."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Sonar scan will run for project $SONAR_PROJECT_KEY in organization $SONAR_ORGANIZATION"
+          fi
+
+      - name: SonarQube scan (imports build/sonar-report.json)
+        # Fail-closed: the scan runs only when the gate explicitly said so.
+        if: steps.gate.outputs.skip == 'false'
+        uses: SonarSource/sonarqube-scan-action@v8
+        with:
+          args: >
+            -Dsonar.organization=${{ vars.SONAR_ORGANIZATION }}
+            -Dsonar.projectKey=${{ vars.SONAR_PROJECT_KEY }}
+
+      - name: Show the scanner's report task (analysis id and dashboard URL)
+        if: always() && steps.gate.outputs.skip == 'false'
+        shell: bash
+        run: |
+          if [ -f .scannerwork/report-task.txt ]; then
+            cat .scannerwork/report-task.txt
+          else
+            echo "No .scannerwork/report-task.txt was produced (the scan did not start or failed before submitting)."
+          fi
+
+      # An issue whose filePath does not match an analysed file is dropped with an
+      # INFO line only, and the analysis stays green. The one reliable control is to
+      # ask the server how many issues of our rule are open after the analysis.
+      - name: Assert that the server holds the expected number of imported issues
+        if: steps.gate.outputs.skip == 'false'
+        shell: bash
+        env:
+          SONAR_ORGANIZATION: ${{ vars.SONAR_ORGANIZATION }}
+          SONAR_PROJECT_KEY: ${{ vars.SONAR_PROJECT_KEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RULE_KEY: external_mule-static-checks:mule-db-query-timeout-missing
+        run: |
+          set -euo pipefail
+          task=.scannerwork/report-task.txt
+          test -f "$task"
+          server=$(sed -n 's/^serverUrl=//p' "$task")
+          ce_url=$(sed -n 's/^ceTaskUrl=//p' "$task")
+          echo "server=$server"
+          status=PENDING
+          for _ in $(seq 1 60); do
+            status=$(curl -sS -u "$SONAR_TOKEN:" "$ce_url" | jq -r '.task.status')
+            case "$status" in
+              SUCCESS) break ;;
+              FAILED|CANCELED) echo "::error::background task ended with $status"; exit 1 ;;
+              *) sleep 5 ;;
+            esac
+          done
+          [ "$status" = "SUCCESS" ] || { echo "::error::background task still $status after 5 minutes"; exit 1; }
+          query="projects=$SONAR_PROJECT_KEY&rules=$RULE_KEY&resolved=false&ps=1"
+          [ -z "$SONAR_ORGANIZATION" ] || query="$query&organization=$SONAR_ORGANIZATION"
+          [ -z "$PR_NUMBER" ] || query="$query&pullRequest=$PR_NUMBER"
+          total=$(curl -sS -u "$SONAR_TOKEN:" "$server/api/issues/search?$query" | jq -r '.total')
+          echo "Open issues of $RULE_KEY on the server: $total (expected $EXPECTED_DEFAULT_FINDINGS)"
+          if [ "$total" != "$EXPECTED_DEFAULT_FINDINGS" ]; then
+            echo "::error::the server holds $total open issues of our rule, expected $EXPECTED_DEFAULT_FINDINGS — check the scanner log for 'External issues ignored for N unknown files'"
+            exit 1
+          fi

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="customers-test-suite.xml"/>
+
+    <munit:test name="customers-get-by-id-flow-returns-customer-test" description="A known customer id is returned by the select">
+        <munit:behavior>
+            <set-variable variableName="customerId" value="#[42]" doc:name="Customer id"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-get-by-id-flow" doc:name="Run customers-get-by-id-flow"/>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[sizeOf(payload)]" is="#[MunitTools::equalTo(1)]" doc:name="Exactly one row"/>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="customers-create-flow-persists-row-test" description="An inserted customer can be read back straight from the table">
+        <munit:behavior>
+            <set-payload value='#[{ fullName: "Probe Customer", email: "probe@example.test" }]' doc:name="New customer"/>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="customers-create-flow" doc:name="Run customers-create-flow"/>
+            <!-- Test-side lookup, deliberately without queryTimeout: files under src/test are outside the check's scope. -->
+            <db:select doc:name="Read the row back" config-ref="Database_Config">
+                <db:sql><![CDATA[SELECT id, full_name, email FROM customers WHERE email = 'probe@example.test']]></db:sql>
+            </db:select>
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload[0].full_name]" is="#[MunitTools::equalTo('Probe Customer')]" doc:name="Name matches"/>
+        </munit:validation>
+    </munit:test>
+
+</mule>

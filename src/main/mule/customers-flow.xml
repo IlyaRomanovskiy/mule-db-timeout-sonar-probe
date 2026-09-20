@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Non-compliant file: three operations carry no queryTimeout, one is compliant. -->
+
+    <flow name="customers-get-by-id-flow" doc:id="8e5a3c6f-1b7d-4a9c-c265-5f3d0b4e6a55">
+        <db:select doc:name="Select customer" config-ref="Database_Config">
+            <db:sql><![CDATA[SELECT id, full_name, email, status
+FROM customers
+WHERE id = :customerId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ customerId: vars.customerId }]]]></db:input-parameters>
+        </db:select>
+    </flow>
+
+    <flow name="customers-create-flow" doc:id="9f6b4d7a-2c8e-4bad-d376-6a4e1c5f7b66">
+        <db:insert doc:name="Insert customer" config-ref="Database_Config">
+            <db:sql><![CDATA[INSERT INTO customers (full_name, email, status, created_at)
+VALUES (:fullName, :email, 'ACTIVE', CURRENT_TIMESTAMP)]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ fullName: payload.fullName, email: payload.email }]]]></db:input-parameters>
+        </db:insert>
+        <set-payload value='#[{ created: payload.affectedRows }]' doc:name="Build response"/>
+    </flow>
+
+    <flow name="customers-audit-flow" doc:id="a07c5e8b-3d9f-4cbe-e487-7b5f2d6a8c77">
+        <db:execute-script doc:name="Write audit trail" config-ref="Database_Config">
+            <db:sql><![CDATA[INSERT INTO customer_audit (customer_id, action, changed_at) VALUES (1, 'SYNC', CURRENT_TIMESTAMP);
+DELETE FROM customer_audit WHERE changed_at < CURRENT_TIMESTAMP - INTERVAL '90' DAY]]></db:sql>
+        </db:execute-script>
+        <logger level="DEBUG" doc:name="Log audit" message="Customer audit trail written"/>
+    </flow>
+
+    <flow name="customers-update-email-flow" doc:id="b18d6f9c-4ea0-4dcf-f598-8c6a3e7b9d88">
+        <db:update doc:name="Update customer email" config-ref="Database_Config" queryTimeout="${db.query.timeout}">
+            <db:sql><![CDATA[UPDATE customers
+SET email = :email, updated_at = CURRENT_TIMESTAMP
+WHERE id = :customerId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ customerId: vars.customerId, email: payload.email }]]]></db:input-parameters>
+        </db:update>
+    </flow>
+
+</mule>

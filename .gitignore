@@ -1,0 +1,5 @@
+# Checker output (generic issue report, extended JSON)
+build/
+
+# SonarScanner working directory
+.scannerwork/

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Shared connection, referenced by every flow of this probe application via config-ref. -->
+    <db:config name="Database_Config" doc:name="Database Config" doc:id="0f2f1d0a-6a1e-4b52-9a7e-2f5d3c1b8a01">
+        <db:generic-connection url="${db.url}" driverClassName="${db.driver}" user="${db.user}" password="${db.password}"/>
+    </db:config>
+
+    <!-- Compliant file: every DB operation below declares a query timeout. -->
+
+    <flow name="orders-get-by-customer-flow" doc:id="4a1c9e2b-7d3f-4c58-8e21-1b9f6d0a2c11">
+        <logger level="INFO" doc:name="Log request" message="#['Fetching orders for customer ' ++ (vars.customerId default 'n/a')]"/>
+        <db:select doc:name="Select orders" config-ref="Database_Config" queryTimeout="${db.query.timeout}">
+            <db:sql><![CDATA[SELECT id, customer_id, status, total_amount, created_at
+FROM orders
+WHERE customer_id = :customerId
+ORDER BY created_at DESC]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ customerId: vars.customerId }]]]></db:input-parameters>
+        </db:select>
+    </flow>
+
+    <flow name="orders-update-status-flow" doc:id="5b2d0f3c-8e4a-4d69-9f32-2c0a7e1b3d22">
+        <db:update doc:name="Update order status" config-ref="Database_Config" queryTimeout="${db.query.timeout}" queryTimeoutUnit="SECONDS">
+            <db:sql><![CDATA[UPDATE orders
+SET status = :status, updated_at = CURRENT_TIMESTAMP
+WHERE id = :orderId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ orderId: vars.orderId, status: payload.status }]]]></db:input-parameters>
+        </db:update>
+        <set-payload value='#[{ orderId: vars.orderId, updated: payload.affectedRows }]' doc:name="Build response"/>
+    </flow>
+
+    <flow name="orders-archive-flow" doc:id="6c3e1a4d-9f5b-4e7a-a043-3d1b8f2c4e33">
+        <db:stored-procedure doc:name="Archive closed orders" config-ref="Database_Config" queryTimeout="30">
+            <db:sql><![CDATA[{ CALL archive_closed_orders(:cutoffDate) }]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ cutoffDate: vars.cutoffDate }]]]></db:input-parameters>
+        </db:stored-procedure>
+        <logger level="INFO" doc:name="Log archive" message="Closed orders archived"/>
+    </flow>
+
+    <flow name="orders-count-open-flow" doc:id="7d4f2b5e-0a6c-4f8b-b154-4e2c9a3d5f44">
+        <set-variable variableName="queryTimeout" value="#[p('db.query.timeout') as Number]" doc:name="Resolve timeout"/>
+        <db:query-single doc:name="Count open orders" config-ref="Database_Config" queryTimeout="#[vars.queryTimeout]">
+            <db:sql><![CDATA[SELECT COUNT(*) AS open_orders FROM orders WHERE status = 'OPEN']]></db:sql>
+        </db:query-single>
+    </flow>
+
+</mule>
