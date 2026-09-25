@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+
+    <!-- Demo: one operation sets queryTimeout, the other does not. -->
+
+    <flow name="payments-get-flow" doc:id="c1a2b3c4-0001-4abc-9def-000000000001">
+        <db:select doc:name="Select payment" config-ref="Database_Config" queryTimeout="${db.timeout}">
+            <db:sql><![CDATA[SELECT id, amount, status FROM payments WHERE id = :paymentId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ paymentId: vars.paymentId }]]]></db:input-parameters>
+        </db:select>
+    </flow>
+
+    <flow name="payments-cancel-flow" doc:id="c1a2b3c4-0002-4abc-9def-000000000002">
+        <db:update doc:name="Cancel payment" config-ref="Database_Config">
+            <db:sql><![CDATA[UPDATE payments SET status = 'CANCELLED' WHERE id = :paymentId]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ paymentId: vars.paymentId }]]]></db:input-parameters>
+        </db:update>
+    </flow>
+</mule>

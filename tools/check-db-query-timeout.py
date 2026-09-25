@@ -3,17 +3,17 @@
 
 Scans src/main/**/*.xml (recursively, all src/main roots found under ROOT).
 
-DEFAULT = the agreed scope: the nine tags db:stored-procedure, db:select,
-db:bulk-delete, db:bulk-insert, db:bulk-update, db:delete, db:insert, db:update and
-db:query-single, and a violation is simply "the queryTimeout attribute is missing".
-The severity ("error") means importance, not a requirement to block a merge.
+DEFAULT = the agreed scope: the nine tags (db:stored-procedure,
+db:select, db:bulk-delete, db:bulk-insert, db:bulk-update, db:delete, db:insert,
+db:update, db:query-single), and a violation is simply "the queryTimeout attribute
+is missing". The severity ("error") is an importance, not a
+requirement to block a merge.
 
---extended turns on everything proposed beyond that scope (three more elements,
-zero/garbage values, the unit attribute). It must not be presented as "the agreed
-check" unless those additions have been accepted.
+--extended turns on additional checks that are outside that scope (three more
+elements, zero and garbage values, the unit attribute). They are off by default.
 
-Finding classes in --extended mode (same semantics as the equivalent SonarQube
-XPath rules):
+Finding classes in --extended mode, same semantics as the equivalent SonarQube
+XPath rules:
 
   blocker  queryTimeout missing, empty, or not a positive integer literal
            (0, 00, +0, 0.0, -1, 0x0 are all "no timeout" or garbage);
@@ -36,7 +36,8 @@ externalised configuration, so it can be tuned per application and per environme
 without a rebuild.
 
 --sonar-report PATH writes the same findings as a SonarQube generic-issue report
-(the {"rules": [...], "issues": [...]} format read by sonar.externalIssuesReportPaths).
+(the {"rules": [...], "issues": [...]} format read by sonar.externalIssuesReportPaths,
+see https://docs.sonarsource.com/sonarqube-cloud/enriching/generic-issue-data/).
 One ad-hoc rule per finding class:
 
   mule-db-query-timeout-missing              attribute missing (default and --extended)
@@ -57,7 +58,7 @@ Only the Python standard library (expat gives file:line for free).
 
 Usage:
     python3 check-db-query-timeout.py [ROOT ...]              # agreed scope (default)
-    python3 check-db-query-timeout.py --extended .           # + proposals beyond the agreed scope
+    python3 check-db-query-timeout.py --extended .           # + checks beyond the ticket
     python3 check-db-query-timeout.py --require-property .   # + hardcoded values
     python3 check-db-query-timeout.py --json .               # machine-readable
     python3 check-db-query-timeout.py --warn-only .          # never fail the build
@@ -103,8 +104,8 @@ OPERATIONS = {
 
 # Exactly the nine tags of the agreed scope, checked exactly as worded there
 # ("has queryTimeout attribute") — no unit check, no zero-value check. This is the
-# default; everything beyond it is a proposal enabled by --extended and must be
-# accepted before it is enforced.
+# default; everything beyond it is an addition enabled by --extended, and it has to
+# be agreed before it is enforced.
 TICKET_OPERATIONS = {
     "stored-procedure", "select", "bulk-delete", "bulk-insert", "bulk-update",
     "delete", "insert", "update", "query-single",
@@ -123,6 +124,9 @@ XML_WS = " \t\r\n"
 # Attribute values are echoed into messages; cap them so a pathological value does
 # not turn one finding into a multi-megabyte line.
 MAX_ECHO = 120
+
+# Bold title of every --github annotation: the family name, then this check.
+ANNOTATION_TITLE = "Mule static checks · DB queryTimeout"
 
 # --- SonarQube generic-issue report (--sonar-report) --------------------------------
 # One ad-hoc rule per finding class. The key order is the order rules are written.
@@ -505,8 +509,8 @@ def main(argv):
     warn_only = "--warn-only" in flags
     as_json = "--json" in flags
     require_property = "--require-property" in flags
-    # Default = the agreed scope: nine tags and attribute presence only. Extensions
-    # are opt-in via --extended.
+    # Default = the ticket scope: the nine tags and attribute presence only.
+    # Everything beyond that is opt-in via --extended.
     ticket_strict = "--extended" not in flags
     allow_empty = "--allow-empty" in flags
     gh = "--github" in flags
@@ -610,8 +614,9 @@ def main(argv):
                 level = "error" if f["severity"] == "blocker" else "warning"
                 # normpath drops the "./" a root of "." leaves in front of the path;
                 # GitHub matches annotation files against workspace-relative paths.
-                print("::%s file=%s,line=%s::%s" % (
+                print("::%s file=%s,line=%s,title=%s::%s" % (
                     level, _gh_prop(os.path.normpath(f["file"])), f["line"],
+                    _gh_prop(ANNOTATION_TITLE),
                     _gh_msg(((f["operation"] + ": ") if f["operation"] else "") + f["reason"])))
             else:
                 print(line)
